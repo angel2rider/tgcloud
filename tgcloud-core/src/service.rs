@@ -51,6 +51,8 @@ impl TgCloudService {
         let metadata = file_fs.metadata().await?;
         let total_size = metadata.len();
         
+        let _ = sender.send(UploadEvent { status: UploadStatus::Hashing }).await;
+
         let mut hasher = Sha256::new();
         let mut file_for_hash = tokio::fs::File::open(path).await?;
         let mut buffer = [0u8; 8192];
@@ -65,11 +67,19 @@ impl TgCloudService {
         let bot = self.bot_manager.get_upload_bot().await?;
         
         let chunked = total_size > MAX_CHUNK_SIZE;
+        let total_parts: u32 = if chunked {
+            ((total_size + MAX_CHUNK_SIZE - 1) / MAX_CHUNK_SIZE) as u32
+        } else {
+            1
+        };
         let mut parts = Vec::new();
         let mut bytes_sent = 0;
 
         if !chunked {
-            // Small file flow
+            // Small file flow (1 part)
+            let _ = sender.send(UploadEvent {
+                status: UploadStatus::ChunkStarted { part_number: 1, total_parts: 1, chunk_size: total_size }
+            }).await;
             let (tg_id, msg_id) = self.telegram.upload_file(&bot.token, &self.chat_id, path, |_| {}).await?;
             parts.push(crate::models::FilePart {
                 part_number: 1,
@@ -81,6 +91,9 @@ impl TgCloudService {
             let _ = sender.send(UploadEvent { 
                 status: UploadStatus::Progress { sent: bytes_sent, total: total_size }
             }).await;
+            let _ = sender.send(UploadEvent {
+                status: UploadStatus::ChunkCompleted { part_number: 1, total_parts: 1 }
+            }).await;
         } else {
             // Chunked upload flow
             let mut file = tokio::fs::File::open(path).await?;
@@ -89,6 +102,11 @@ impl TgCloudService {
             
             while remaining > 0 {
                 let current_chunk_size = std::cmp::min(remaining, MAX_CHUNK_SIZE);
+
+                let _ = sender.send(UploadEvent {
+                    status: UploadStatus::ChunkStarted { part_number: part_num, total_parts, chunk_size: current_chunk_size }
+                }).await;
+
                 let part_reader = file.take(current_chunk_size);
                 
                 let file_name = format!("{}.part{}", 
@@ -117,15 +135,13 @@ impl TgCloudService {
                         let _ = sender.send(UploadEvent { 
                             status: UploadStatus::Progress { sent: bytes_sent, total: total_size }
                         }).await;
+                        let _ = sender.send(UploadEvent {
+                            status: UploadStatus::ChunkCompleted { part_number: part_num, total_parts }
+                        }).await;
                         
                         remaining -= current_chunk_size;
                         part_num += 1;
                         
-                        // Re-wrap the file as `take` consumes ownership or we need to re-open/seek
-                        // Simplified: we can just use the same file handle if we don't move it? 
-                        // Actually `file.take()` consumes `file` if it's `AsyncRead`.
-                        // Let's re-open and seek or use a reference if possible. 
-                        // But wait, `file` is `tokio::fs::File`, we can seek.
                         file = tokio::fs::File::open(path).await?;
                         file.seek(std::io::SeekFrom::Start(bytes_sent)).await?;
                     }

@@ -55,7 +55,10 @@ pub struct UploadEvent {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum UploadStatus {
     Started,
+    Hashing,
+    ChunkStarted { part_number: u32, total_parts: u32, chunk_size: u64 },
     Progress { sent: u64, total: u64 },
+    ChunkCompleted { part_number: u32, total_parts: u32 },
     Completed { file_id: String },
     Failed { error: String },
 }

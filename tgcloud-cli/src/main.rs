@@ -96,25 +96,46 @@ async fn main() -> anyhow::Result<()> {
             while let Some(event) = rx.recv().await {
                 match event.status {
                     UploadStatus::Started => {
-                        // We don't know total size here immediately unless we stat file first or wait for progress
-                        // service emits hash calc start maybe?
-                        // For now, wait for progress to init bar or just spinner
                         let s = create_spinner("Preparing upload...");
                         pb = Some(s);
                     }
-                    UploadStatus::Progress { sent, total } => {
+                    UploadStatus::Hashing => {
                         if let Some(bar) = &pb {
-                            if bar.length() == Some(u64::MAX) || bar.length().is_none() {
-                                // Switch to upload bar
-                                bar.finish_and_clear();
-                                pb = Some(create_upload_pb(total));
-                            }
-                        } else {
-                             pb = Some(create_upload_pb(total));
+                            bar.finish_and_clear();
                         }
-                        
+                        let s = create_spinner("Calculating SHA-256 hash...");
+                        pb = Some(s);
+                    }
+                    UploadStatus::ChunkStarted { part_number, total_parts, chunk_size } => {
                         if let Some(bar) = &pb {
+                            bar.finish_and_clear();
+                        }
+                        let size_str = human_bytes::human_bytes(chunk_size as f64);
+                        if total_parts == 1 {
+                            println!("  {} Uploading file ({})...", "📦".cyan(), size_str.yellow());
+                        } else {
+                            println!("  {} Uploading part {}/{} ({})...", "📦".cyan(), part_number.to_string().green(), total_parts.to_string().yellow(), size_str.yellow());
+                        }
+                        pb = None;
+                    }
+                    UploadStatus::Progress { sent, total } => {
+                        if pb.is_none() {
+                            pb = Some(create_upload_pb(total));
+                        }
+                        if let Some(bar) = &pb {
+                            if bar.length() != Some(total) {
+                                bar.set_length(total);
+                            }
                             bar.set_position(sent);
+                        }
+                    }
+                    UploadStatus::ChunkCompleted { part_number, total_parts } => {
+                        if let Some(bar) = &pb {
+                            bar.finish_and_clear();
+                        }
+                        pb = None;
+                        if total_parts > 1 {
+                            println!("  {} Part {}/{} uploaded successfully", "✅".green(), part_number.to_string().green(), total_parts.to_string().yellow());
                         }
                     }
                     UploadStatus::Completed { file_id } => {
