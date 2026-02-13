@@ -1,0 +1,22 @@
+[package]
+name = "tgcloud-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+mongodb = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+url = { workspace = true }
+tokio-util = { workspace = true }
+log = { workspace = true }
+regex = "1.10"
+rand = "0.8"

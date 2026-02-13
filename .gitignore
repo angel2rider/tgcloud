@@ -1,0 +1,26 @@
+# Rust
+/target
+Cargo.lock
+
+# Environment
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Local Database & Data
+tgcloud.db
+*.flac
+*.mp4
+*.mkv
+*.zip
+*.rar
+
+# Temporary / Logs
+*.log
+check_output.txt
+*.bak
+
+# Subprojects / External Tools
+/telegram-bot-api/
