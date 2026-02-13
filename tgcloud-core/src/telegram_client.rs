@@ -3,7 +3,6 @@ use tokio::fs::File;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use crate::errors::{Result, TgCloudError};
 use serde_json::Value;
-use std::path::Path;
 
 #[derive(Clone)]
 pub struct TelegramClient {
@@ -24,30 +23,43 @@ impl TelegramClient {
         token: &str, 
         chat_id: &str, 
         path: &str, 
-        _progress_callback: impl Fn(u64) + Send + Sync + 'static // Simple callback for now
+        _progress_callback: impl Fn(u64) + Send + Sync + 'static
     ) -> Result<(String, i64)> {
-        let file_path = Path::new(path);
+        let file_path = std::path::Path::new(path);
         let file_name = file_path.file_name()
             .ok_or_else(|| TgCloudError::UploadFailed("Invalid file path".to_string()))?
             .to_string_lossy()
             .to_string();
 
         let file = File::open(path).await?;
-        let metadata = file.metadata().await?;
-        let _total_size = metadata.len();
-
-        // For true progress reporting with reqwest, we usually need a custom stream wrapper 
-        // that counts bytes read and calls the callback.
-        // For simplicity in this implementation, we will use FramedRead directly 
-        // and assume "Started" -> "Completed" for the event stream in the service layer 
-        // unless we implement a custom AsyncRead.
-        
         let stream = FramedRead::new(file, BytesCodec::new());
         let file_body = Body::wrap_stream(stream);
 
+        self.upload_stream(token, chat_id, file_name, file_body).await
+    }
+
+    pub async fn upload_part(
+        &self,
+        token: &str,
+        chat_id: &str,
+        file_name: String,
+        reader: impl tokio::io::AsyncRead + Send + Sync + 'static,
+    ) -> Result<(String, i64)> {
+        let stream = FramedRead::new(reader, BytesCodec::new());
+        let file_body = Body::wrap_stream(stream);
+        self.upload_stream(token, chat_id, file_name, file_body).await
+    }
+
+    async fn upload_stream(
+        &self,
+        token: &str,
+        chat_id: &str,
+        file_name: String,
+        body: Body,
+    ) -> Result<(String, i64)> {
         let form = multipart::Form::new()
             .text("chat_id", chat_id.to_string())
-            .part("document", multipart::Part::stream(file_body).file_name(file_name));
+            .part("document", multipart::Part::stream(body).file_name(file_name));
 
         let url = format!("{}/bot{}/sendDocument", self.api_url, token);
         let res = self.client.post(&url)
@@ -60,10 +72,6 @@ impl TelegramClient {
             let text = res.text().await?;
             return Err(TgCloudError::UploadFailed(format!("Telegram API error ({}): {}", status, text)));
         }
-        
-        // We need to parse the response to getting file_id
-        // But wait, we returned early above. 
-        // Re-check logic: if !success, read text and error.
         
         let json: Value = res.json().await?;
         

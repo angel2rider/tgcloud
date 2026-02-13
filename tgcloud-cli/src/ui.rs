@@ -64,7 +64,7 @@ pub fn print_file_list(files: Vec<tgcloud_core::File>) {
     for file in files {
         table.add_row(vec![
             Cell::new(file.path),
-            Cell::new(human_bytes(file.size as f64)),
+            Cell::new(human_bytes(file.total_size as f64)),
             Cell::new(file.created_at.to_rfc3339()),
             Cell::new(file.bot_id),
         ]);

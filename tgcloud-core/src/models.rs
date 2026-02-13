@@ -3,15 +3,22 @@ use mongodb::bson::oid::ObjectId;
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FilePart {
+    pub part_number: u32,
+    pub telegram_file_id: String,
+    pub message_id: i64,
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct File {
     #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
     pub id: Option<ObjectId>,
     pub path: String,
     pub bot_id: String,
-    pub telegram_file_id: String,
-    #[serde(default)] // Handle missing field for legacy data
-    pub message_id: Option<i64>,
-    pub size: u64,
+    pub parts: Vec<FilePart>,
+    pub total_size: u64,
+    pub chunked: bool,
     pub hash: String,
     pub created_at: DateTime<Utc>,
 }
