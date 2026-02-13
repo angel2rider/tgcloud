@@ -8,7 +8,7 @@ use sha2::{Sha256, Digest};
 use chrono::Utc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt};
 
-const MAX_CHUNK_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2GB
+const MAX_CHUNK_SIZE: u64 = 2000 * 1024 * 1024; // 2000 MiB (Telegram's limit is exactly 2000MB)
 
 pub struct TgCloudService {
     store: MongoStore,
