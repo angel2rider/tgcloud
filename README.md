@@ -136,8 +136,6 @@ tgcloud delete filename
 - [x] **CHUNKED UPLOADS**: Support for files larger than 2GB.
 - [x] **ROBUST PATHS**: ID-based file management for extreme reliability.
 - [x] **CORE REFACTOR**: User-centric configuration directory.
-- [ ] **FUSE MOUNT**: Mount TG-Cloud as a local virtual drive.
-- [ ] **ENCRYPTION**: End-to-end client-side AES-256 encryption.
 
 ---
 
