@@ -5,8 +5,9 @@ use clap::{Parser, Subcommand};
 use dotenv::dotenv;
 use indicatif::ProgressBar;
 use owo_colors::OwoColorize;
-use std::collections::HashMap;
 use std::env;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tgcloud_core::{BotConfig, Config, DownloadStatus, TgCloudService, UploadStatus};
 use tokio::sync::mpsc;
 use ui::*;
@@ -65,6 +66,8 @@ async fn main() -> anyhow::Result<()> {
         telegram_api_url,
         telegram_chat_id,
         bots,
+        max_global_concurrency: tgcloud_core::config::DEFAULT_MAX_GLOBAL_CONCURRENCY,
+        max_per_bot_concurrency: tgcloud_core::config::DEFAULT_MAX_PER_BOT_CONCURRENCY,
     };
 
     let spinner = create_spinner("Connecting to services...");
@@ -88,87 +91,63 @@ async fn main() -> anyhow::Result<()> {
             let upload_handle =
                 tokio::spawn(async move { service_handle.upload_file(&path, tx).await });
 
-            let mp = create_multi_progress();
-            let mut overall_bar: Option<ProgressBar> = None;
-            let mut chunk_bars: HashMap<u32, ProgressBar> = HashMap::new();
-            let mut spinner_bar: Option<ProgressBar> = None;
-            let mut total_file_size: u64;
-            let mut overall_sent: u64 = 0;
+            let mut progress_bar: Option<ProgressBar> = None;
+            let mut spinner: Option<ProgressBar> = None;
 
             while let Some(event) = rx.recv().await {
                 match event.status {
-                    UploadStatus::Started => {
-                        let s = mp.add(create_spinner("Preparing upload..."));
-                        spinner_bar = Some(s);
+                    UploadStatus::Started {
+                        total_size,
+                        total_chunks: _,
+                        progress,
+                    } => {
+                        if total_size > 256 * 1024 * 1024 {
+                            let pb = create_overall_bar_direct(total_size);
+                            progress_bar = Some(pb.clone());
+
+                            // Spawn a task to update the progress bar from the atomic counter.
+                            tokio::spawn(async move {
+                                while !pb.is_finished() {
+                                    let current = progress.load(Ordering::Relaxed);
+                                    pb.set_position(current);
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                }
+                            });
+                        } else {
+                            spinner = Some(create_spinner("Uploading..."));
+                        }
                     }
                     UploadStatus::Hashing => {
-                        if let Some(s) = spinner_bar.take() {
+                        if let Some(s) = spinner.take() {
                             s.finish_and_clear();
                         }
-                        let s = mp.add(create_spinner("Calculating SHA-256 hash..."));
-                        spinner_bar = Some(s);
+                        spinner = Some(create_spinner("Calculating SHA-256 hash..."));
                     }
                     UploadStatus::HashComplete { sha256 } => {
-                        if let Some(s) = spinner_bar.take() {
+                        if let Some(s) = spinner.take() {
                             s.finish_and_clear();
                         }
-                        mp.println(format!(
+                        println!(
                             "  {} SHA-256: {}",
                             "🔒".cyan(),
                             sha256[..16].to_string().yellow()
-                        ))
-                        .ok();
-                    }
-                    UploadStatus::ChunkStarted {
-                        chunk_index,
-                        total_chunks,
-                        chunk_size,
-                    } => {
-                        // Create overall bar on first chunk if not yet created.
-                        if overall_bar.is_none() {
-                            // Compute total size from chunks.
-                            // We accumulate as we go. Set estimated total.
-                            total_file_size = chunk_size * total_chunks as u64; // rough estimate
-                            let ob = create_overall_bar(&mp, total_file_size);
-                            overall_bar = Some(ob);
-                        }
-                        let cb = create_chunk_bar(&mp, chunk_index, total_chunks, chunk_size);
-                        chunk_bars.insert(chunk_index, cb);
-                    }
-                    UploadStatus::ChunkProgress {
-                        chunk_index,
-                        bytes_sent,
-                        chunk_size: _,
-                    } => {
-                        if let Some(cb) = chunk_bars.get(&chunk_index) {
-                            cb.set_position(bytes_sent);
-                        }
-                    }
-                    UploadStatus::ChunkCompleted {
-                        chunk_index,
-                        total_chunks: _,
-                    } => {
-                        if let Some(cb) = chunk_bars.remove(&chunk_index) {
-                            let chunk_size = cb.length().unwrap_or(0);
-                            cb.finish_and_clear();
-                            overall_sent += chunk_size;
-                            if let Some(ob) = &overall_bar {
-                                ob.set_position(overall_sent);
-                            }
-                        }
+                        );
                     }
                     UploadStatus::Completed { file_id } => {
-                        if let Some(ob) = overall_bar.take() {
-                            ob.finish_and_clear();
+                        if let Some(pb) = progress_bar.take() {
+                            pb.finish_and_clear();
+                        }
+                        if let Some(s) = spinner.take() {
+                            s.finish_and_clear();
                         }
                         print_success(&format!("Upload completed!\n    File ID: {}\n", file_id));
                     }
                     UploadStatus::Failed { error } => {
-                        if let Some(ob) = overall_bar.take() {
-                            ob.finish_and_clear();
+                        if let Some(pb) = progress_bar.take() {
+                            pb.finish_and_clear();
                         }
-                        for (_, cb) in chunk_bars.drain() {
-                            cb.finish_and_clear();
+                        if let Some(s) = spinner.take() {
+                            s.finish_and_clear();
                         }
                         print_error(&format!("Upload failed: {}", error));
                     }
@@ -202,87 +181,66 @@ async fn main() -> anyhow::Result<()> {
                     .await
             });
 
-            let mp = create_multi_progress();
-            let mut overall_bar: Option<ProgressBar> = None;
-            let mut chunk_bars: HashMap<u32, ProgressBar> = HashMap::new();
-            let mut spinner_bar: Option<ProgressBar> = None;
-            let mut overall_downloaded: u64 = 0;
+            let mut progress_bar: Option<ProgressBar> = None;
+            let mut spinner: Option<ProgressBar> = None;
 
             while let Some(event) = rx.recv().await {
                 match event.status {
                     DownloadStatus::Started {
                         total_size,
                         total_chunks,
+                        progress,
                     } => {
-                        let ob = create_overall_bar(&mp, total_size);
-                        overall_bar = Some(ob);
-                        mp.println(format!(
+                        println!(
                             "  {} File: {} in {} chunk(s)",
                             "📁".cyan(),
                             human_bytes::human_bytes(total_size as f64).yellow(),
                             total_chunks.to_string().green()
-                        ))
-                        .ok();
-                    }
-                    DownloadStatus::ChunkStarted {
-                        chunk_index,
-                        total_chunks,
-                        chunk_size,
-                    } => {
-                        let cb = create_chunk_bar(&mp, chunk_index, total_chunks, chunk_size);
-                        chunk_bars.insert(chunk_index, cb);
-                    }
-                    DownloadStatus::ChunkProgress {
-                        chunk_index,
-                        bytes_downloaded,
-                        chunk_size: _,
-                    } => {
-                        if let Some(cb) = chunk_bars.get(&chunk_index) {
-                            cb.set_position(bytes_downloaded);
-                        }
-                    }
-                    DownloadStatus::ChunkCompleted {
-                        chunk_index,
-                        total_chunks: _,
-                    } => {
-                        if let Some(cb) = chunk_bars.remove(&chunk_index) {
-                            let chunk_size = cb.length().unwrap_or(0);
-                            cb.finish_and_clear();
-                            overall_downloaded += chunk_size;
-                            if let Some(ob) = &overall_bar {
-                                ob.set_position(overall_downloaded);
-                            }
+                        );
+
+                        if total_size > 256 * 1024 * 1024 {
+                            let pb = create_overall_bar_direct(total_size);
+                            progress_bar = Some(pb.clone());
+
+                            // Spawn a task to update the progress bar from the atomic counter.
+                            tokio::spawn(async move {
+                                while !pb.is_finished() {
+                                    let current = progress.load(Ordering::Relaxed);
+                                    pb.set_position(current);
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+                                }
+                            });
+                        } else {
+                            spinner = Some(create_spinner("Downloading..."));
                         }
                     }
                     DownloadStatus::Merging => {
-                        let s = mp.add(create_spinner("Merging chunks..."));
-                        spinner_bar = Some(s);
+                        if let Some(pb) = progress_bar.take() {
+                            pb.finish_and_clear();
+                        }
+                        if let Some(s) = spinner.take() {
+                            s.finish_and_clear();
+                        }
+                        spinner = Some(create_spinner("Merging chunks..."));
                     }
                     DownloadStatus::Verifying => {
-                        if let Some(s) = spinner_bar.take() {
+                        if let Some(s) = spinner.take() {
                             s.finish_and_clear();
                         }
-                        let s = mp.add(create_spinner("Verifying SHA-256 integrity..."));
-                        spinner_bar = Some(s);
+                        spinner = Some(create_spinner("Verifying SHA-256 integrity..."));
                     }
                     DownloadStatus::Completed { .. } => {
-                        if let Some(s) = spinner_bar.take() {
+                        if let Some(s) = spinner.take() {
                             s.finish_and_clear();
-                        }
-                        if let Some(ob) = overall_bar.take() {
-                            ob.finish_and_clear();
                         }
                         print_success("Download completed successfully. Integrity verified ✓");
                     }
                     DownloadStatus::Failed { error } => {
-                        if let Some(s) = spinner_bar.take() {
+                        if let Some(pb) = progress_bar.take() {
+                            pb.finish_and_clear();
+                        }
+                        if let Some(s) = spinner.take() {
                             s.finish_and_clear();
-                        }
-                        if let Some(ob) = overall_bar.take() {
-                            ob.finish_and_clear();
-                        }
-                        for (_, cb) in chunk_bars.drain() {
-                            cb.finish_and_clear();
                         }
                         print_error(&format!("Download failed: {}", error));
                     }

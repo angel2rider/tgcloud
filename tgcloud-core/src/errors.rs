@@ -26,8 +26,14 @@ pub enum TgCloudError {
     #[error("Download failed: {0}")]
     DownloadFailed(String),
 
-    #[error("Integrity error: expected SHA256 {expected}, got {got}")]
-    IntegrityError { expected: String, got: String },
+    #[error("Delete failed: {0}")]
+    DeleteFailed(String),
+
+    #[error("Integrity error: {0}")]
+    IntegrityFailed(String),
+
+    #[error("Rate limited: {0}")]
+    RateLimited(String),
 
     #[error("Retry exhausted after {attempts} attempts: {last_error}")]
     RetryExhausted { attempts: u32, last_error: String },

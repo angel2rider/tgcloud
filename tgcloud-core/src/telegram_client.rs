@@ -1,7 +1,12 @@
 use crate::errors::{Result, TgCloudError};
 use reqwest::{multipart, Body, Client, StatusCode};
 use serde_json::Value;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
+use tokio::io::AsyncRead;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 /// Maximum number of retry attempts for transient errors.
@@ -102,6 +107,7 @@ impl TelegramClient {
     // Upload part with retry — re-opens the file for each attempt
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn upload_part_with_retry(
         &self,
         token: &str,
@@ -110,6 +116,7 @@ impl TelegramClient {
         file_path: &str,
         offset: u64,
         length: u64,
+        progress: Arc<AtomicU64>,
     ) -> Result<(String, i64)> {
         use tokio::io::AsyncSeekExt;
 
@@ -127,11 +134,13 @@ impl TelegramClient {
             let client = client.clone();
             let file_name = file_name_owned.clone();
             let file_path = file_path_owned.clone();
+            let progress = Arc::clone(&progress);
             async move {
                 let mut file = tokio::fs::File::open(&file_path).await?;
                 file.seek(std::io::SeekFrom::Start(offset)).await?;
                 let reader = tokio::io::AsyncReadExt::take(file, length);
-                let stream = FramedRead::new(reader, BytesCodec::new());
+                let reader_with_progress = ProgressWrapper::new(reader, progress);
+                let stream = FramedRead::new(reader_with_progress, BytesCodec::new());
                 let file_body = Body::wrap_stream(stream);
                 upload_stream_inner(&client, &api_url, &token, &chat_id, file_name, file_body).await
             }
@@ -189,7 +198,11 @@ impl TelegramClient {
     }
 
     /// Download with automatic retry on 429 / 5xx.
-    pub async fn download_file_with_retry(&self, url: &str) -> Result<reqwest::Response> {
+    pub async fn download_file_with_retry(
+        &self,
+        url: &str,
+        _progress: Arc<AtomicU64>, // Kept for consistency, but we wrap the response stream chunking instead
+    ) -> Result<reqwest::Response> {
         let client = self.client.clone();
         let url_owned = url.to_string();
 
@@ -329,7 +342,9 @@ fn check_transient_status(res: &reqwest::Response) -> Result<()> {
 /// Determine whether an error is retryable (429 or 5xx related).
 fn is_retryable(err: &TgCloudError) -> bool {
     match err {
-        TgCloudError::UploadFailed(msg) | TgCloudError::DownloadFailed(msg) => {
+        TgCloudError::UploadFailed(msg)
+        | TgCloudError::DownloadFailed(msg)
+        | TgCloudError::DeleteFailed(msg) => {
             msg.contains("429")
                 || msg.contains("Rate limited")
                 || msg.contains("Server error")
@@ -338,6 +353,7 @@ fn is_retryable(err: &TgCloudError) -> bool {
                 || msg.contains("503")
                 || msg.contains("504")
         }
+        TgCloudError::RateLimited(_) => true,
         TgCloudError::TelegramError(_) => {
             // reqwest connection/timeout errors are retryable
             true
@@ -358,4 +374,34 @@ fn backoff_delay(attempt: u32) -> Duration {
     };
     let ms = (base as i64 + jitter).max(100) as u64;
     Duration::from_millis(ms)
+}
+/// A wrapper that tracks bytes read from an underlying AsyncRead.
+struct ProgressWrapper<R> {
+    inner: R,
+    progress: Arc<AtomicU64>,
+}
+
+impl<R> ProgressWrapper<R> {
+    fn new(inner: R, progress: Arc<AtomicU64>) -> Self {
+        Self { inner, progress }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for ProgressWrapper<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        match Pin::new(&mut self.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {
+                let n = buf.filled().len() - before;
+                self.progress.fetch_add(n as u64, Ordering::Relaxed);
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }

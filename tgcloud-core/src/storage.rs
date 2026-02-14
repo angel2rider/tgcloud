@@ -35,7 +35,11 @@ impl MongoStore {
     // -----------------------------------------------------------------------
 
     pub async fn save_file(&self, file: FileMetadata) -> Result<ObjectId> {
-        let result = self.files_collection().insert_one(file, None).await?;
+        let result = self
+            .files_collection()
+            .insert_one(file, None)
+            .await
+            .map_err(TgCloudError::MongoError)?;
         result
             .inserted_id
             .as_object_id()
@@ -46,14 +50,14 @@ impl MongoStore {
         self.files_collection()
             .find_one(doc! { "original_name": path }, None)
             .await
-            .map_err(Into::into)
+            .map_err(TgCloudError::MongoError)
     }
 
     pub async fn get_file_by_id(&self, file_id: &str) -> Result<Option<FileMetadata>> {
         self.files_collection()
             .find_one(doc! { "file_id": file_id }, None)
             .await
-            .map_err(Into::into)
+            .map_err(TgCloudError::MongoError)
     }
 
     pub async fn list_files(&self, folder_prefix: &str) -> Result<Vec<FileMetadata>> {
@@ -63,9 +67,13 @@ impl MongoStore {
             doc! { "original_name": { "$regex": format!("^{}", regex::escape(folder_prefix)) } }
         };
 
-        let mut cursor = self.files_collection().find(filter, None).await?;
+        let mut cursor = self
+            .files_collection()
+            .find(filter, None)
+            .await
+            .map_err(TgCloudError::MongoError)?;
         let mut files = Vec::new();
-        while let Some(file) = cursor.try_next().await? {
+        while let Some(file) = cursor.try_next().await.map_err(TgCloudError::MongoError)? {
             files.push(file);
         }
         Ok(files)
@@ -75,7 +83,8 @@ impl MongoStore {
         let count = self
             .files_collection()
             .count_documents(doc! { "original_name": new_path }, None)
-            .await?;
+            .await
+            .map_err(TgCloudError::MongoError)?;
         if count > 0 {
             return Err(TgCloudError::Unknown(format!(
                 "File already exists at {}",
@@ -90,7 +99,8 @@ impl MongoStore {
                 doc! { "$set": { "original_name": new_path } },
                 None,
             )
-            .await?;
+            .await
+            .map_err(TgCloudError::MongoError)?;
 
         if result.modified_count == 0 {
             return Err(TgCloudError::FileNotFound(old_path.to_string()));
@@ -102,7 +112,8 @@ impl MongoStore {
         let result = self
             .files_collection()
             .delete_one(doc! { "original_name": path }, None)
-            .await?;
+            .await
+            .map_err(TgCloudError::MongoError)?;
         if result.deleted_count == 0 {
             return Err(TgCloudError::FileNotFound(path.to_string()));
         }
@@ -123,7 +134,8 @@ impl MongoStore {
                     .upsert(true)
                     .build(),
             )
-            .await?;
+            .await
+            .map_err(TgCloudError::MongoError)?;
         Ok(())
     }
 
@@ -131,9 +143,10 @@ impl MongoStore {
         let mut cursor = self
             .bots_collection()
             .find(doc! { "active": true }, None)
-            .await?;
+            .await
+            .map_err(TgCloudError::MongoError)?;
         let mut bots = Vec::new();
-        while let Some(bot) = cursor.try_next().await? {
+        while let Some(bot) = cursor.try_next().await.map_err(TgCloudError::MongoError)? {
             bots.push(bot);
         }
         Ok(bots)
@@ -146,7 +159,8 @@ impl MongoStore {
                 doc! { "$inc": { "upload_count": 1 } },
                 None,
             )
-            .await?;
+            .await
+            .map_err(TgCloudError::MongoError)?;
         Ok(())
     }
 }

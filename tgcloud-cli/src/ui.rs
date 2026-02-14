@@ -1,7 +1,7 @@
 use comfy_table::{presets::UTF8_FULL, Attribute, Cell, Color, Table};
 use console::{style, Emoji};
 use human_bytes::human_bytes;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -41,45 +41,17 @@ pub fn create_spinner(message: &str) -> ProgressBar {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-progress helpers
+// Progress helpers
 // ---------------------------------------------------------------------------
 
-pub fn create_multi_progress() -> MultiProgress {
-    MultiProgress::new()
-}
-
-/// Overall file progress bar (tracks total bytes across all chunks).
-pub fn create_overall_bar(mp: &MultiProgress, total_size: u64) -> ProgressBar {
-    let pb = mp.add(ProgressBar::new(total_size));
+pub fn create_overall_bar_direct(total_size: u64) -> ProgressBar {
+    let pb = ProgressBar::new(total_size);
     pb.set_style(
         ProgressStyle::default_bar()
             .template(
-                "{spinner:.green} Overall  [{elapsed_precise}] [{bar:40.cyan/blue}] \
-                 {bytes}/{total_bytes} ({bytes_per_sec}) ETA {eta}",
+                "{spinner:.green}  [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, ETA {eta})",
             )
             .expect("invalid bar template")
-            .progress_chars("█▓░"),
-    );
-    pb.enable_steady_tick(Duration::from_millis(200));
-    pb
-}
-
-/// Per-chunk progress bar.
-pub fn create_chunk_bar(
-    mp: &MultiProgress,
-    chunk_index: u32,
-    total_chunks: u32,
-    chunk_size: u64,
-) -> ProgressBar {
-    let pb = mp.add(ProgressBar::new(chunk_size));
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template(&format!(
-                "  {{spinner:.blue}} Chunk {}/{} [{{bar:30.magenta/blue}}] \
-                 {{bytes}}/{{total_bytes}} ({{bytes_per_sec}}) ETA {{eta}}",
-                chunk_index, total_chunks
-            ))
-            .expect("invalid chunk bar template")
             .progress_chars("█▓░"),
     );
     pb.enable_steady_tick(Duration::from_millis(200));

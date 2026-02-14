@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileChunk {
     pub index: u32,
+    pub bot_id: String,
     pub telegram_file_id: String,
     pub message_id: i64,
     pub size: u64,
@@ -24,7 +25,6 @@ pub struct FileMetadata {
     pub sha256: String,
     pub chunks: Vec<FileChunk>,
     pub created_at: DateTime<Utc>,
-    pub bot_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -48,24 +48,14 @@ pub struct UploadEvent {
 
 #[derive(Debug, Clone)]
 pub enum UploadStatus {
-    Started,
+    Started {
+        total_size: u64,
+        total_chunks: u32,
+        progress: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    },
     Hashing,
     HashComplete {
         sha256: String,
-    },
-    ChunkStarted {
-        chunk_index: u32,
-        total_chunks: u32,
-        chunk_size: u64,
-    },
-    ChunkProgress {
-        chunk_index: u32,
-        bytes_sent: u64,
-        chunk_size: u64,
-    },
-    ChunkCompleted {
-        chunk_index: u32,
-        total_chunks: u32,
     },
     Completed {
         file_id: String,
@@ -89,20 +79,7 @@ pub enum DownloadStatus {
     Started {
         total_size: u64,
         total_chunks: u32,
-    },
-    ChunkStarted {
-        chunk_index: u32,
-        total_chunks: u32,
-        chunk_size: u64,
-    },
-    ChunkProgress {
-        chunk_index: u32,
-        bytes_downloaded: u64,
-        chunk_size: u64,
-    },
-    ChunkCompleted {
-        chunk_index: u32,
-        total_chunks: u32,
+        progress: std::sync::Arc<std::sync::atomic::AtomicU64>,
     },
     Merging,
     Verifying,

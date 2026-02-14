@@ -10,6 +10,8 @@ use chrono::Utc;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, Semaphore};
@@ -17,16 +19,14 @@ use uuid::Uuid;
 
 /// Fixed chunk size: 256 MiB.
 const CHUNK_SIZE: u64 = 268_435_456;
-/// Maximum parallel upload tasks.
-const MAX_PARALLEL_UPLOADS: usize = 4;
-/// Maximum parallel download tasks.
-const MAX_PARALLEL_DOWNLOADS: usize = 6;
 
 pub struct TgCloudService {
     store: MongoStore,
     telegram: TelegramClient,
     bot_manager: BotManager,
     chat_id: String,
+    max_global_concurrency: usize,
+    max_per_bot_concurrency: usize,
 }
 
 impl TgCloudService {
@@ -52,7 +52,22 @@ impl TgCloudService {
             telegram,
             bot_manager,
             chat_id: config.telegram_chat_id,
+            max_global_concurrency: config.max_global_concurrency,
+            max_per_bot_concurrency: config.max_per_bot_concurrency,
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: build per-bot semaphore map
+    // -----------------------------------------------------------------------
+
+    fn build_per_bot_semaphores(&self, bot_ids: &[String]) -> HashMap<String, Arc<Semaphore>> {
+        let mut map = HashMap::with_capacity(bot_ids.len());
+        for id in bot_ids {
+            map.entry(id.clone())
+                .or_insert_with(|| Arc::new(Semaphore::new(self.max_per_bot_concurrency)));
+        }
+        map
     }
 
     // =======================================================================
@@ -60,9 +75,23 @@ impl TgCloudService {
     // =======================================================================
 
     pub async fn upload_file(&self, path: &str, sender: mpsc::Sender<UploadEvent>) -> Result<()> {
+        let metadata = tokio::fs::metadata(path).await?;
+        let total_size = metadata.len();
+        let total_chunks = if total_size == 0 {
+            1
+        } else {
+            total_size.div_ceil(CHUNK_SIZE) as u32
+        };
+
+        let progress = Arc::new(AtomicU64::new(0));
+
         let _ = sender
             .send(UploadEvent {
-                status: UploadStatus::Started,
+                status: UploadStatus::Started {
+                    total_size,
+                    total_chunks,
+                    progress: Arc::clone(&progress),
+                },
             })
             .await;
 
@@ -72,9 +101,6 @@ impl TgCloudService {
                 status: UploadStatus::Hashing,
             })
             .await;
-
-        let metadata = tokio::fs::metadata(path).await?;
-        let total_size = metadata.len();
 
         let sha256 = {
             let mut hasher = Sha256::new();
@@ -98,23 +124,43 @@ impl TgCloudService {
             })
             .await;
 
-        // 2. Determine chunks.
-        let total_chunks = if total_size == 0 {
-            1
+        // 2. Select bot(s).
+        //    Files <= 256MB: single bot (lowest usage).
+        //    Files >  256MB: distribute chunks across ALL active bots.
+        let is_multi_bot = total_size > CHUNK_SIZE;
+
+        let bots = if is_multi_bot {
+            self.bot_manager.get_all_active_bots().await?
         } else {
-            total_size.div_ceil(CHUNK_SIZE) as u32
+            vec![self.bot_manager.get_upload_bot().await?]
         };
 
-        // 3. Select bot.
-        let bot = self.bot_manager.get_upload_bot().await?;
+        // Build token map for quick access by spawned tasks.
+        let token_map: HashMap<String, String> = bots
+            .iter()
+            .map(|b| (b.bot_id.clone(), b.token.clone()))
+            .collect();
+        let token_map = Arc::new(token_map);
+
+        // Bot IDs list for round-robin assignment.
+        let bot_ids: Vec<String> = bots.iter().map(|b| b.bot_id.clone()).collect();
+
+        // 3. Two-layer concurrency control.
+        let global_semaphore = Arc::new(Semaphore::new(self.max_global_concurrency));
+        let per_bot_semaphores = Arc::new(self.build_per_bot_semaphores(&bot_ids));
 
         // 4. Parallel upload with bounded concurrency.
-        let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_UPLOADS));
         let mut futures = FuturesUnordered::new();
 
         for chunk_index in 0..total_chunks {
             let offset = chunk_index as u64 * CHUNK_SIZE;
             let current_chunk_size = std::cmp::min(CHUNK_SIZE, total_size.saturating_sub(offset));
+
+            // Assign bot: round-robin for multi-bot, single bot otherwise.
+            let assigned_bot_id = bot_ids[chunk_index as usize % bot_ids.len()].clone();
+            let bot_token = token_map.get(&assigned_bot_id).cloned().ok_or_else(|| {
+                TgCloudError::UploadFailed(format!("Token not found for bot {}", assigned_bot_id))
+            })?;
 
             let chunk_file_name = format!(
                 "{}.chunk{}",
@@ -125,31 +171,34 @@ impl TgCloudService {
                 chunk_index
             );
 
-            let permit = Arc::clone(&semaphore);
+            let global_sem = Arc::clone(&global_semaphore);
+            let per_bot_sem =
+                Arc::clone(per_bot_semaphores.get(&assigned_bot_id).ok_or_else(|| {
+                    TgCloudError::UploadFailed(format!(
+                        "Per-bot semaphore not found for bot {}",
+                        assigned_bot_id
+                    ))
+                })?);
             let telegram = self.telegram.clone();
-            let bot_token = bot.token.clone();
             let chat_id = self.chat_id.clone();
-            let sender_clone = sender.clone();
             let path_owned = path.to_string();
+            let progress_clone = Arc::clone(&progress);
+            let bot_id_owned = assigned_bot_id;
 
             futures.push(tokio::spawn(async move {
-                // Acquire semaphore permit — bounds concurrent tasks.
-                let _permit = permit
-                    .acquire()
-                    .await
-                    .map_err(|_| TgCloudError::UploadFailed("Semaphore closed".to_string()))?;
+                // Acquire global semaphore permit.
+                let _global_permit = global_sem.acquire().await.map_err(|_| {
+                    TgCloudError::UploadFailed("Global semaphore closed".to_string())
+                })?;
 
-                let _ = sender_clone
-                    .send(UploadEvent {
-                        status: UploadStatus::ChunkStarted {
-                            chunk_index,
-                            total_chunks,
-                            chunk_size: current_chunk_size,
-                        },
-                    })
-                    .await;
+                // Acquire per-bot semaphore permit.
+                let _bot_permit = per_bot_sem.acquire().await.map_err(|_| {
+                    TgCloudError::UploadFailed(format!(
+                        "Per-bot semaphore closed for bot {}",
+                        bot_id_owned
+                    ))
+                })?;
 
-                // Upload with retry — each retry re-opens the file and seeks.
                 let (tg_id, msg_id) = telegram
                     .upload_part_with_retry(
                         &bot_token,
@@ -158,20 +207,13 @@ impl TgCloudService {
                         &path_owned,
                         offset,
                         current_chunk_size,
+                        progress_clone,
                     )
                     .await?;
 
-                let _ = sender_clone
-                    .send(UploadEvent {
-                        status: UploadStatus::ChunkCompleted {
-                            chunk_index,
-                            total_chunks,
-                        },
-                    })
-                    .await;
-
                 Ok::<FileChunk, TgCloudError>(FileChunk {
                     index: chunk_index,
+                    bot_id: bot_id_owned,
                     telegram_file_id: tg_id,
                     message_id: msg_id,
                     size: current_chunk_size,
@@ -192,7 +234,6 @@ impl TgCloudService {
                     if first_error.is_none() {
                         first_error = Some(e);
                     }
-                    // Continue draining to allow rollback of completed chunks.
                 }
                 Err(join_err) => {
                     if first_error.is_none() {
@@ -206,12 +247,14 @@ impl TgCloudService {
         }
 
         if let Some(err) = first_error {
-            // Rollback all successfully uploaded chunks.
+            // Rollback all successfully uploaded chunks, using each chunk's bot_id.
             for chunk in &chunks {
-                let _ = self
-                    .telegram
-                    .delete_message(&bot.token, &self.chat_id, chunk.message_id)
-                    .await;
+                if let Some(token) = token_map.get(&chunk.bot_id) {
+                    let _ = self
+                        .telegram
+                        .delete_message(token, &self.chat_id, chunk.message_id)
+                        .await;
+                }
             }
             let _ = sender
                 .send(UploadEvent {
@@ -239,13 +282,20 @@ impl TgCloudService {
             sha256,
             chunks: chunks.clone(),
             created_at: Utc::now(),
-            bot_id: bot.bot_id.clone(),
         };
 
         // 6. Persist metadata.
         match self.store.save_file(file_meta).await {
             Ok(_) => {
-                self.bot_manager.increment_usage(&bot.bot_id).await?;
+                // Increment usage for each bot that handled chunks.
+                let mut usage_counts: HashMap<String, u64> = HashMap::new();
+                for chunk in &chunks {
+                    *usage_counts.entry(chunk.bot_id.clone()).or_insert(0) += 1;
+                }
+                for (bot_id, _count) in &usage_counts {
+                    self.bot_manager.increment_usage(bot_id).await?;
+                }
+
                 let _ = sender
                     .send(UploadEvent {
                         status: UploadStatus::Completed { file_id },
@@ -256,10 +306,12 @@ impl TgCloudService {
             Err(e) => {
                 // Rollback Telegram uploads on DB failure.
                 for chunk in &chunks {
-                    let _ = self
-                        .telegram
-                        .delete_message(&bot.token, &self.chat_id, chunk.message_id)
-                        .await;
+                    if let Some(token) = token_map.get(&chunk.bot_id) {
+                        let _ = self
+                            .telegram
+                            .delete_message(token, &self.chat_id, chunk.message_id)
+                            .await;
+                    }
                 }
                 let _ = sender
                     .send(UploadEvent {
@@ -283,21 +335,32 @@ impl TgCloudService {
         output_path: &str,
         sender: mpsc::Sender<DownloadEvent>,
     ) -> Result<()> {
-        let file_opt = self.store.get_file_by_path(path).await?;
+        let file_opt: Option<FileMetadata> = self.store.get_file_by_path(path).await?;
         let file = file_opt.ok_or_else(|| TgCloudError::FileNotFound(path.to_string()))?;
+
+        let progress = Arc::new(AtomicU64::new(0));
 
         let _ = sender
             .send(DownloadEvent {
                 status: DownloadStatus::Started {
                     total_size: file.size,
                     total_chunks: file.total_chunks,
+                    progress: Arc::clone(&progress),
                 },
             })
             .await;
 
-        let token = self
+        // Build token map from unique bot_ids across chunks.
+        let unique_bot_ids: Vec<String> = {
+            let mut ids: Vec<String> = file.chunks.iter().map(|c| c.bot_id.clone()).collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+
+        let token_map = self
             .bot_manager
-            .get_bot_token(&file.bot_id)
+            .get_token_map(&unique_bot_ids)
             .await
             .inspect_err(|e| {
                 let _ = sender.try_send(DownloadEvent {
@@ -306,79 +369,68 @@ impl TgCloudService {
                     },
                 });
             })?;
+        let token_map = Arc::new(token_map);
 
         let mut chunks = file.chunks.clone();
         chunks.sort_by_key(|c| c.index);
 
-        // 1. Parallel download to temp files.
-        let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_DOWNLOADS));
+        // 1. Two-layer concurrency control.
+        let global_semaphore = Arc::new(Semaphore::new(self.max_global_concurrency));
+        let per_bot_semaphores = Arc::new(self.build_per_bot_semaphores(&unique_bot_ids));
+
+        // 2. Parallel download to temp files.
         let mut futures = FuturesUnordered::new();
         let output_path_owned = output_path.to_string();
 
         for chunk in &chunks {
-            let permit = Arc::clone(&semaphore);
+            let global_sem = Arc::clone(&global_semaphore);
+            let per_bot_sem =
+                Arc::clone(per_bot_semaphores.get(&chunk.bot_id).ok_or_else(|| {
+                    TgCloudError::DownloadFailed(format!(
+                        "Per-bot semaphore not found for bot {}",
+                        chunk.bot_id
+                    ))
+                })?);
             let telegram = self.telegram.clone();
-            let token_clone = token.clone();
-            let sender_clone = sender.clone();
+            let token = token_map.get(&chunk.bot_id).cloned().ok_or_else(|| {
+                TgCloudError::DownloadFailed(format!("Token not found for bot {}", chunk.bot_id))
+            })?;
             let chunk_index = chunk.index;
-            let chunk_size = chunk.size;
-            let total_chunks = file.total_chunks;
             let telegram_file_id = chunk.telegram_file_id.clone();
             let temp_path = format!("{}.chunk_{}.tmp", output_path_owned, chunk_index);
+            let progress_task = Arc::clone(&progress);
+            let bot_id_owned = chunk.bot_id.clone();
 
             futures.push(tokio::spawn(async move {
-                let _permit = permit
-                    .acquire()
-                    .await
-                    .map_err(|_| TgCloudError::DownloadFailed("Semaphore closed".to_string()))?;
+                // Acquire global semaphore permit.
+                let _global_permit = global_sem.acquire().await.map_err(|_| {
+                    TgCloudError::DownloadFailed("Global semaphore closed".to_string())
+                })?;
 
-                let _ = sender_clone
-                    .send(DownloadEvent {
-                        status: DownloadStatus::ChunkStarted {
-                            chunk_index,
-                            total_chunks,
-                            chunk_size,
-                        },
-                    })
-                    .await;
+                // Acquire per-bot semaphore permit.
+                let _bot_permit = per_bot_sem.acquire().await.map_err(|_| {
+                    TgCloudError::DownloadFailed(format!(
+                        "Per-bot semaphore closed for bot {}",
+                        bot_id_owned
+                    ))
+                })?;
 
                 // Get download URL and download with retry.
-                let url = telegram
-                    .get_download_url(&token_clone, &telegram_file_id)
+                let url = telegram.get_download_url(&token, &telegram_file_id).await?;
+                let response = telegram
+                    .download_file_with_retry(&url, Arc::clone(&progress_task))
                     .await?;
-                let mut response = telegram.download_file_with_retry(&url).await?;
 
                 // Stream to temp file.
                 let mut temp_file = tokio::fs::File::create(&temp_path).await?;
-                let mut bytes_written: u64 = 0;
-
-                while let Some(data) = response
-                    .chunk()
-                    .await
-                    .map_err(TgCloudError::TelegramError)?
-                {
+                let mut stream = response;
+                while let Some(data) = stream.chunk().await.map_err(TgCloudError::TelegramError)? {
                     temp_file.write_all(&data).await?;
-                    bytes_written += data.len() as u64;
-                    let _ = sender_clone.try_send(DownloadEvent {
-                        status: DownloadStatus::ChunkProgress {
-                            chunk_index,
-                            bytes_downloaded: bytes_written,
-                            chunk_size,
-                        },
-                    });
+                    progress_task
+                        .fetch_add(data.len() as u64, std::sync::atomic::Ordering::Relaxed);
                 }
 
                 temp_file.flush().await?;
-
-                let _ = sender_clone
-                    .send(DownloadEvent {
-                        status: DownloadStatus::ChunkCompleted {
-                            chunk_index,
-                            total_chunks,
-                        },
-                    })
-                    .await;
-
                 Ok::<(u32, String), TgCloudError>((chunk_index, temp_path))
             }));
         }
@@ -421,7 +473,7 @@ impl TgCloudService {
             return Err(err);
         }
 
-        // 2. Sequential merge.
+        // 3. Sequential merge.
         let _ = sender
             .send(DownloadEvent {
                 status: DownloadStatus::Merging,
@@ -445,7 +497,7 @@ impl TgCloudService {
         out_file.flush().await?;
         drop(out_file);
 
-        // 3. SHA-256 verification.
+        // 4. SHA-256 verification.
         let _ = sender
             .send(DownloadEvent {
                 status: DownloadStatus::Verifying,
@@ -472,10 +524,10 @@ impl TgCloudService {
             for (_, tmp) in &temp_files {
                 let _ = tokio::fs::remove_file(tmp).await;
             }
-            let err = TgCloudError::IntegrityError {
-                expected: file.sha256.clone(),
-                got: actual_hash,
-            };
+            let err = TgCloudError::IntegrityFailed(format!(
+                "SHA256 mismatch: expected {}, got {}",
+                file.sha256, actual_hash
+            ));
             let _ = sender
                 .send(DownloadEvent {
                     status: DownloadStatus::Failed {
@@ -486,7 +538,7 @@ impl TgCloudService {
             return Err(err);
         }
 
-        // 4. Clean up temp files.
+        // 5. Clean up temp files.
         for (_, tmp) in &temp_files {
             let _ = tokio::fs::remove_file(tmp).await;
         }
@@ -514,16 +566,96 @@ impl TgCloudService {
         let file_opt: Option<FileMetadata> = self.store.get_file_by_path(path).await?;
         let file = file_opt.ok_or_else(|| TgCloudError::FileNotFound(path.to_string()))?;
 
-        let token = self.bot_manager.get_bot_token(&file.bot_id).await?;
+        // Build token map from unique bot_ids across chunks.
+        let unique_bot_ids: Vec<String> = {
+            let mut ids: Vec<String> = file.chunks.iter().map(|c| c.bot_id.clone()).collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
 
-        // Delete all chunks from Telegram.
+        let token_map = self.bot_manager.get_token_map(&unique_bot_ids).await?;
+        let token_map = Arc::new(token_map);
+
+        // Two-layer concurrency control.
+        let global_semaphore = Arc::new(Semaphore::new(self.max_global_concurrency));
+        let per_bot_semaphores = Arc::new(self.build_per_bot_semaphores(&unique_bot_ids));
+
+        // Parallel delete via FuturesUnordered.
+        let mut futures = FuturesUnordered::new();
+
         for chunk in &file.chunks {
-            self.telegram
-                .delete_message(&token, &self.chat_id, chunk.message_id)
-                .await?;
+            let global_sem = Arc::clone(&global_semaphore);
+            let per_bot_sem =
+                Arc::clone(per_bot_semaphores.get(&chunk.bot_id).ok_or_else(|| {
+                    TgCloudError::DeleteFailed(format!(
+                        "Per-bot semaphore not found for bot {}",
+                        chunk.bot_id
+                    ))
+                })?);
+            let telegram = self.telegram.clone();
+            let token = token_map.get(&chunk.bot_id).cloned().ok_or_else(|| {
+                TgCloudError::DeleteFailed(format!("Token not found for bot {}", chunk.bot_id))
+            })?;
+            let chat_id = self.chat_id.clone();
+            let message_id = chunk.message_id;
+            let bot_id_owned = chunk.bot_id.clone();
+            let chunk_index = chunk.index;
+
+            futures.push(tokio::spawn(async move {
+                // Acquire global semaphore permit.
+                let _global_permit = global_sem.acquire().await.map_err(|_| {
+                    TgCloudError::DeleteFailed("Global semaphore closed".to_string())
+                })?;
+
+                // Acquire per-bot semaphore permit.
+                let _bot_permit = per_bot_sem.acquire().await.map_err(|_| {
+                    TgCloudError::DeleteFailed(format!(
+                        "Per-bot semaphore closed for bot {}",
+                        bot_id_owned
+                    ))
+                })?;
+
+                telegram
+                    .delete_message(&token, &chat_id, message_id)
+                    .await
+                    .map_err(|e| {
+                        TgCloudError::DeleteFailed(format!(
+                            "Failed to delete chunk {} (bot {}): {}",
+                            chunk_index, bot_id_owned, e
+                        ))
+                    })?;
+
+                Ok::<(), TgCloudError>(())
+            }));
         }
 
-        // Delete from Mongo (only if all TG deletes succeeded).
+        // Collect results. ALL must succeed before metadata removal.
+        let mut errors: Vec<String> = Vec::new();
+
+        while let Some(join_result) = futures.next().await {
+            match join_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    errors.push(e.to_string());
+                }
+                Err(join_err) => {
+                    errors.push(format!("Task panicked: {}", join_err));
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            // Partial failure: do NOT remove metadata.
+            return Err(TgCloudError::DeleteFailed(format!(
+                "Partial delete failure ({}/{} chunks failed): {}",
+                errors.len(),
+                file.chunks.len(),
+                errors.join("; ")
+            )));
+        }
+
+        // All Telegram deletions succeeded — remove metadata.
         self.store.delete_file(path).await?;
 
         Ok(())
