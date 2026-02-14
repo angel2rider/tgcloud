@@ -313,9 +313,9 @@ async fn upload_stream_inner(
 fn check_transient_status(res: &reqwest::Response) -> Result<()> {
     let status = res.status();
     if status == StatusCode::TOO_MANY_REQUESTS {
-        return Err(TgCloudError::UploadFailed(format!(
-            "Rate limited (HTTP 429)"
-        )));
+        return Err(TgCloudError::UploadFailed(
+            "Rate limited (HTTP 429)".to_string(),
+        ));
     }
     if status.is_server_error() {
         return Err(TgCloudError::UploadFailed(format!(

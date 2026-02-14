@@ -102,7 +102,7 @@ impl TgCloudService {
         let total_chunks = if total_size == 0 {
             1
         } else {
-            ((total_size + CHUNK_SIZE - 1) / CHUNK_SIZE) as u32
+            total_size.div_ceil(CHUNK_SIZE) as u32
         };
 
         // 3. Select bot.
@@ -299,13 +299,12 @@ impl TgCloudService {
             .bot_manager
             .get_bot_token(&file.bot_id)
             .await
-            .map_err(|e| {
+            .inspect_err(|e| {
                 let _ = sender.try_send(DownloadEvent {
                     status: DownloadStatus::Failed {
                         error: e.to_string(),
                     },
                 });
-                e
             })?;
 
         let mut chunks = file.chunks.clone();

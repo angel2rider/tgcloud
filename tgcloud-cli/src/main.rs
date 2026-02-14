@@ -70,9 +70,8 @@ async fn main() -> anyhow::Result<()> {
     let spinner = create_spinner("Connecting to services...");
     let service = TgCloudService::new(config)
         .await
-        .map_err(|e| {
+        .inspect_err(|_| {
             spinner.finish_and_clear();
-            e
         })
         .context("Failed to initialize service")?;
     spinner.finish_and_clear();
