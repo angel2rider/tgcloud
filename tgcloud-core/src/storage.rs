@@ -1,5 +1,5 @@
 use crate::errors::{Result, TgCloudError};
-use crate::models::{Bot, FileMetadata};
+use crate::models::FileMetadata;
 use futures::stream::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId};
 use mongodb::{options::ClientOptions, Client, Collection};
@@ -26,9 +26,6 @@ impl MongoStore {
         self.client.database(&self.db_name).collection("files")
     }
 
-    fn bots_collection(&self) -> Collection<Bot> {
-        self.client.database(&self.db_name).collection("bots")
-    }
 
     // -----------------------------------------------------------------------
     // File CRUD
@@ -108,6 +105,23 @@ impl MongoStore {
         Ok(())
     }
 
+    pub async fn rename_file_by_id(&self, file_id: &str, new_name: &str) -> Result<()> {
+        let result = self
+            .files_collection()
+            .update_one(
+                doc! { "file_id": file_id },
+                doc! { "$set": { "original_name": new_name } },
+                None,
+            )
+            .await
+            .map_err(TgCloudError::MongoError)?;
+
+        if result.matched_count == 0 {
+            return Err(TgCloudError::FileNotFound(file_id.to_string()));
+        }
+        Ok(())
+    }
+
     pub async fn delete_file(&self, path: &str) -> Result<()> {
         let result = self
             .files_collection()
@@ -120,47 +134,20 @@ impl MongoStore {
         Ok(())
     }
 
-    // -----------------------------------------------------------------------
-    // Bot CRUD
-    // -----------------------------------------------------------------------
-
-    pub async fn add_bot(&self, bot: Bot) -> Result<()> {
-        let filter = doc! { "bot_id": bot.bot_id.clone() };
-        self.bots_collection()
-            .replace_one(
-                filter,
-                bot,
-                mongodb::options::ReplaceOptions::builder()
-                    .upsert(true)
-                    .build(),
-            )
+    pub async fn delete_file_by_id(&self, file_id: &str) -> Result<()> {
+        let result = self
+            .files_collection()
+            .delete_one(doc! { "file_id": file_id }, None)
             .await
             .map_err(TgCloudError::MongoError)?;
+        if result.deleted_count == 0 {
+            return Err(TgCloudError::FileNotFound(file_id.to_string()));
+        }
         Ok(())
     }
 
-    pub async fn get_active_bots(&self) -> Result<Vec<Bot>> {
-        let mut cursor = self
-            .bots_collection()
-            .find(doc! { "active": true }, None)
-            .await
-            .map_err(TgCloudError::MongoError)?;
-        let mut bots = Vec::new();
-        while let Some(bot) = cursor.try_next().await.map_err(TgCloudError::MongoError)? {
-            bots.push(bot);
-        }
-        Ok(bots)
-    }
-
-    pub async fn increment_bot_usage(&self, bot_id: &str) -> Result<()> {
-        self.bots_collection()
-            .update_one(
-                doc! { "bot_id": bot_id },
-                doc! { "$inc": { "upload_count": 1 } },
-                None,
-            )
-            .await
-            .map_err(TgCloudError::MongoError)?;
+    pub async fn increment_bot_usage(&self, _bot_id: &str) -> Result<()> {
+        // No-op in single-bot mode
         Ok(())
     }
 }

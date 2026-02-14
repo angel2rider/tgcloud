@@ -1,6 +1,6 @@
 # TG-Cloud 🚀
 
-**TG-Cloud** is a production-grade, distributed storage system that leverages the Telegram Bot API as a secure and unlimited file backend. It provides a seamless CLI experience to manage files with high-performance streaming, robust metadata persistence via MongoDB, and intelligent bot load balancing.
+**TG-Cloud** is a production-grade, distributed storage system that leverages the Telegram Bot API as a secure and unlimited file backend. It provides a seamless CLI experience to manage files with high-performance streaming, robust metadata persistence via MongoDB.
 
 ---
 
@@ -12,7 +12,6 @@ Cloud storage often comes with steep costs, complex API hurdles, or privacy conc
 ## ✨ Key Features
 - **Unlimited Storage Backend**: Uses Telegram’s `sendDocument` API to store files up to 2GB.
 - **Micro-Service Ready Core**: Modular Rust workspace with a clean separation between the logic library (`tgcloud-core`) and the terminal interface (`tgcloud-cli`).
-- **Intelligent Bot Orchestration**: Automatically load balances uploads across a pool of bots to distribute traffic and bypass rate limits.
 - **Rich CLI UX**: High-fidelity progress bars, speed trackers, ETAs, and beautiful data tables.
 - **Integrity First**: Automatic SHA-256 hashing and file size verification on every upload.
 - **Hard Deletion & Atomic Rename**: Supports one-click hard deletion (Telegram + Database) and instant metadata renaming.
@@ -40,12 +39,11 @@ graph TD
     C -->|Metadata| D[(MongoDB)]
     C -->|File Stream| E[Telegram API]
     E <-->|Data| F[Telegram Servers]
-    C -->|Bot Selection| G[Bot Pool Manager]
 ```
 
 ### Internal Data Flow
-1. **Upload**: CLI streams file to `tgcloud-core` -> Core selects least-used Bot -> Streams to Telegram -> Captures `file_id` + `message_id` -> Hashes file -> Saves Meta to MongoDB.
-2. **Download**: Core fetches metadata from MongoDB -> Retrieves Bot Token -> Resolves Download URL from Telegram -> Streams bytes directly to disk.
+1. **Upload**: CLI streams file to `tgcloud-core` -> Core streams to Telegram -> Captures `file_id` + `message_id` -> Hashes file -> Saves Meta to MongoDB.
+2. **Download**: Core fetches metadata from MongoDB -> Resolves Download URL from Telegram -> Streams bytes directly to disk.
 3. **Delete**: Core identifies `message_id` -> Commands Telegram to `deleteMessage` -> Removes MongoDB record upon success.
 
 ---
@@ -55,7 +53,6 @@ graph TD
 .
 ├── tgcloud-core/          # Core logic library (Infrastructure Agnostic)
 │   ├── src/
-│   │   ├── bot_manager.rs # Load balancing logic
 │   │   ├── config.rs      # Configuration models
 │   │   ├── storage.rs     # MongoDB persistence layer
 │   │   ├── telegram.rs    # Bot API client (Streaming)
@@ -75,7 +72,7 @@ graph TD
 ### Prerequisites
 - [Rust](https://rustup.rs/) (Stable)
 - [MongoDB](https://www.mongodb.com/try/download/community) (Local or Atlas)
-- One or more Telegram Bots (created via [@BotFather](https://t.me/BotFather))
+- One Telegram Bot (created via [@BotFather](https://t.me/BotFather))
 - A target Telegram Chat ID (where files will be stored)
 
 ### Installation
@@ -101,12 +98,9 @@ TELEGRAM_CHAT_ID=-100xxxxxxxx
 # Telegram Bot API URL (Standard or Local Server)
 TELEGRAM_API_URL=https://api.telegram.org
 
-# Configure Bots (JSON Array)
-BOTS_JSON='[{"bot_id":"123","token":"123:ABC"}, {"bot_id":"456","token":"456:DEF"}]'
-
-# OR Single Bot (legacy support)
-# BOT_ID=123
-# BOT_TOKEN=123:ABC
+# Required: Telegram Bot ID and Token
+BOT_ID=123456789
+BOT_TOKEN=1234567890:ABC-DEF1234567890
 ```
 
 ---
@@ -152,7 +146,7 @@ tgcloud delete path/to/file.zip
 
 ## 🗺 Roadmap
 - [ ] **FUSE Mount**: Mount TG-Cloud as a local virtual drive.
-- [ ] **Chunking**: Support for files larger than 2GB (automatic splitting).
+- [x] **Chunking**: Support for files larger than 2GB (automatic splitting).
 - [ ] **GUI Dashboard**: Web-based interface for file management.
 - [ ] **Encryption**: End-to-end client-side AES-256 encryption.
 

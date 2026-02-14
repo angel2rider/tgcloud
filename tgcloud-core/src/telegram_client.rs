@@ -180,10 +180,27 @@ impl TelegramClient {
         let json: Value = res.json().await?;
 
         let file_path = json["result"]["file_path"].as_str().ok_or_else(|| {
-            TgCloudError::DownloadFailed("No file_path in Telegram response".to_string())
+            TgCloudError::DownloadFailed(format!("No file_path in Telegram response: {:?}", json))
         })?;
 
-        Ok(format!("{}/file/bot{}/{}", self.api_url, token, file_path))
+        // If file_path is absolute (common in local mode), strip the leading slash
+        // to avoid double slashes in the constructed URL.
+        let sanitized_path = file_path.trim_start_matches('/');
+
+        Ok(format!("{}/file/bot{}/{}", self.api_url, token, sanitized_path))
+    }
+
+    /// Triggers getFile and returns the local file path (absolute in local mode).
+    pub async fn get_local_file_path(&self, token: &str, file_id: &str) -> Result<String> {
+        let url = format!("{}/bot{}/getFile?file_id={}", self.api_url, token, file_id);
+        let res = self.client.get(&url).send().await?;
+        let json: Value = res.json().await?;
+
+        let file_path = json["result"]["file_path"].as_str().ok_or_else(|| {
+            TgCloudError::DownloadFailed(format!("No file_path in Telegram response: {:?}", json))
+        })?;
+
+        Ok(file_path.to_string())
     }
 
     pub async fn download_file(&self, url: &str) -> Result<reqwest::Response> {
@@ -201,7 +218,7 @@ impl TelegramClient {
     pub async fn download_file_with_retry(
         &self,
         url: &str,
-        _progress: Arc<AtomicU64>, // Kept for consistency, but we wrap the response stream chunking instead
+        _progress: Arc<AtomicU64>,
     ) -> Result<reqwest::Response> {
         let client = self.client.clone();
         let url_owned = url.to_string();

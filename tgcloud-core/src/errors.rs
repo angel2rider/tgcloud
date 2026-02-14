@@ -1,6 +1,24 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+pub enum ConfigError {
+    #[error("BOTS_JSON environment variable not set")]
+    MissingBotsJson,
+
+    #[error("Invalid BOTS_JSON: {0}")]
+    InvalidBotsJson(String),
+
+    #[error("{0} must be set")]
+    MissingEnvVar(String),
+
+    #[error("Neither BOTS_JSON nor BOT_ID/BOT_TOKEN provided")]
+    NoValidBotConfig,
+
+    #[error("Configuration error: {0}")]
+    General(String),
+}
+
+#[derive(Error, Debug)]
 pub enum TgCloudError {
     #[error("MongoDB error: {0}")]
     MongoError(#[from] mongodb::error::Error),
@@ -17,8 +35,8 @@ pub enum TgCloudError {
     #[error("File not found: {0}")]
     FileNotFound(String),
 
-    #[error("Invalid configuration: {0}")]
-    ConfigError(String),
+    #[error("Configuration error: {0}")]
+    ConfigError(#[from] ConfigError),
 
     #[error("Upload failed: {0}")]
     UploadFailed(String),

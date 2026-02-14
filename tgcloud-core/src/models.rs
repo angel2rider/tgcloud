@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileChunk {
     pub index: u32,
-    pub bot_id: String,
+    #[serde(default)]
+    pub bot_id: Option<String>,
     pub telegram_file_id: String,
     pub message_id: i64,
     pub size: u64,
@@ -25,16 +26,8 @@ pub struct FileMetadata {
     pub sha256: String,
     pub chunks: Vec<FileChunk>,
     pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Bot {
-    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
-    pub id: Option<ObjectId>,
-    pub bot_id: String,
-    pub token: String,
-    pub upload_count: u64,
-    pub active: bool,
+    #[serde(default)]
+    pub bot_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

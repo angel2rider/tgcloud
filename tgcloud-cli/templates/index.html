@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TGCloud — Telegram-backed Storage</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --sidebar-color: #f8f9fa;
+            --border-color: #e0e0e0;
+            --text-color: #3c4043;
+            --accent-color: #1a73e8;
+            --hover-color: #f1f3f4;
+            --header-height: 64px;
+            --sidebar-width: 240px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            color: var(--text-color);
+            background-color: var(--bg-color);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        header {
+            height: var(--header-height);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 22px;
+            font-weight: 500;
+            color: var(--text-color);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            color: var(--accent-color);
+        }
+
+        /* Layout */
+        .container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        aside {
+            width: var(--sidebar-width);
+            background-color: var(--sidebar-color);
+            display: flex;
+            flex-direction: column;
+            padding: 16px 8px;
+            gap: 4px;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 24px;
+            border-radius: 0 24px 24px 0;
+            cursor: pointer;
+            font-weight: 500;
+            color: #5f6368;
+            transition: background 0.2s;
+        }
+
+        .nav-item.active {
+            background-color: #e8f0fe;
+            color: var(--accent-color);
+        }
+
+        /* Main Content */
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        .actions-bar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .btn {
+            background-color: white;
+            border: 1px solid var(--border-color);
+            padding: 8px 24px;
+            border-radius: 24px;
+            cursor: pointer;
+            font-weight: 500;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            transition: box-shadow 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            background-color: var(--hover-color);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn-primary {
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+        }
+
+        .btn-primary:hover {
+            background-color: #1765cc;
+        }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            color: #5f6368;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+        }
+
+        tr:hover td {
+            background-color: var(--hover-color);
+        }
+
+        .file-icon {
+            color: #5f6368;
+            margin-right: 12px;
+        }
+
+        .file-name-container {
+            display: flex;
+            align-items: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .row-actions {
+            display: flex;
+            gap: 16px;
+            opacity: 0;
+            justify-content: flex-end;
+        }
+
+        tr:hover .row-actions {
+            opacity: 1;
+        }
+
+        .action-icon {
+            cursor: pointer;
+            color: #5f6368;
+            font-size: 18px;
+            user-select: none;
+        }
+
+        .action-icon:hover {
+            color: var(--accent-color);
+        }
+
+        /* Progress Bar */
+        #drop-zone {
+            border: 2px dashed transparent;
+            transition: border 0.3s;
+        }
+
+        #drop-zone.drag-over {
+            border-color: var(--accent-color);
+            background-color: #e8f0fe99;
+        }
+
+        .status-toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: #323232;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 4px;
+            display: none;
+            box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+        }
+    </style>
+</head>
+
+<body id="drop-zone">
+    <header>
+        <div class="logo">
+            <span class="logo-icon">☁️</span>
+            TGCloud
+        </div>
+        <div style="font-size: 14px; color: #5f6368;">
+            Telegram-backed distributed storage
+        </div>
+    </header>
+
+    <div class="container">
+        <aside>
+            <div class="nav-item active">📂 Files</div>
+        </aside>
+
+        <main>
+            <div class="actions-bar">
+                <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">
+                    <span>➕</span> Upload
+                </button>
+                <input type="file" id="file-input" style="display: none" onchange="handleUpload(this.files[0])">
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 50%">Name</th>
+                        <th>Size</th>
+                        <th>Uploaded</th>
+                        <th style="text-align: right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="file-list">
+                    {% for file in files %}
+                    <tr>
+                        <td>
+                            <div class="file-name-container">
+                                <span class="file-icon">📄</span>
+                                <span title="{{ file.original_name }}">{{ file.original_name }}</span>
+                            </div>
+                        </td>
+                        <td>{{ file.size }}</td>
+                        <td>{{ file.created_at }}</td>
+                        <td>
+                            <div class="row-actions">
+                                <span class="action-icon" title="Download"
+                                    onclick="downloadFile('{{ file.original_name }}')">⬇️</span>
+                                <span class="action-icon" title="Rename"
+                                    onclick="renameFile('{{ file.file_id }}', '{{ file.original_name }}')">✏️</span>
+                                <span class="action-icon" title="Delete"
+                                    onclick="deleteFile('{{ file.file_id }}', '{{ file.original_name }}')">🗑️</span>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </main>
+    </div>
+
+    <div id="status-toast" class="status-toast"></div>
+
+    <script>
+        const statusToast = document.getElementById('status-toast');
+        const dropZone = document.getElementById('drop-zone');
+
+        function showToast(msg, duration = 3000) {
+            statusToast.innerText = msg;
+            statusToast.style.display = 'block';
+            setTimeout(() => {
+                statusToast.style.display = 'none';
+            }, duration);
+        }
+
+        // Drag and Drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file) handleUpload(file);
+        });
+
+        async function handleUpload(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            showToast(`Uploading ${file.name}...`);
+
+            try {
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    showToast('Upload successful!');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    const error = await response.text();
+                    showToast('Upload failed: ' + error);
+                }
+            } catch (e) {
+                showToast('Error uploading file: ' + e);
+            }
+        }
+
+        async function downloadFile(path) {
+            showToast(`Fetching ${path}...`);
+            try {
+                const response = await fetch('/api/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ remote_path: path })
+                });
+                if (response.ok) {
+                    showToast('File fetched to server local cache.');
+                } else {
+                    const error = await response.text();
+                    showToast('Fetch failed: ' + error);
+                }
+            } catch (e) {
+                showToast('Error triggering download.');
+            }
+        }
+
+        async function renameFile(fileId, oldName) {
+            const newName = prompt('Enter new filename:', oldName);
+            if (!newName || newName === oldName) return;
+
+            try {
+                const response = await fetch('/api/rename', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_id: fileId, new_path: newName })
+                });
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    const error = await response.text();
+                    showToast('Rename failed: ' + error);
+                }
+            } catch (e) {
+                showToast('Error renaming file.');
+            }
+        }
+
+        async function deleteFile(fileId, name) {
+            if (!confirm(`Are you sure you want to delete ${name}?`)) return;
+
+            showToast(`Deleting ${name}...`);
+            try {
+                const response = await fetch(`/api/file/${fileId}`, {
+                    method: 'DELETE'
+                });
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    const error = await response.text();
+                    showToast('Delete failed: ' + error);
+                }
+            } catch (e) {
+                showToast('Error deleting file.');
+            }
+        }
+    </script>
+</body>
+
+</html>

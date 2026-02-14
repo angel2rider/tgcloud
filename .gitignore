@@ -24,3 +24,7 @@ check_output.txt
 
 # Subprojects / External Tools
 /telegram-bot-api/
+
+# Local TG Bot Data
+[0-9]*:[a-zA-Z0-9_-]*/
+*.binlog
