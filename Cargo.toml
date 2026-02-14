@@ -25,3 +25,4 @@ sha2 = "0.10"
 hex = "0.4"
 url = "2.5"
 tokio-util = { version = "0.7", features = ["codec", "io"] }
+indicatif = "0.17"

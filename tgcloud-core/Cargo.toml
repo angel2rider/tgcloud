@@ -18,5 +18,6 @@ hex = { workspace = true }
 url = { workspace = true }
 tokio-util = { workspace = true }
 log = { workspace = true }
+indicatif = { workspace = true }
 regex = "1.10"
 rand = "0.8"
