@@ -1,17 +1,15 @@
 mod ui;
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use dotenv::dotenv;
+use indicatif::ProgressBar;
+use owo_colors::OwoColorize;
 use std::collections::HashMap;
 use std::env;
-use tgcloud_core::{
-    BotConfig, Config, DownloadStatus, TgCloudService, UploadStatus,
-};
+use tgcloud_core::{BotConfig, Config, DownloadStatus, TgCloudService, UploadStatus};
 use tokio::sync::mpsc;
-use anyhow::Context;
 use ui::*;
-use owo_colors::OwoColorize;
-use indicatif::ProgressBar;
 
 #[derive(Parser)]
 #[command(name = "tgcloud")]
@@ -36,10 +34,7 @@ enum Commands {
         folder: String,
     },
     /// Rename a file
-    Rename {
-        old_path: String,
-        new_path: String,
-    },
+    Rename { old_path: String, new_path: String },
     /// Delete a file
     Delete { path: String },
 }
@@ -56,17 +51,13 @@ async fn main() -> anyhow::Result<()> {
     let mongo_uri = env::var("MONGO_URI").context("MONGO_URI must be set")?;
     let telegram_api_url =
         env::var("TELEGRAM_API_URL").unwrap_or_else(|_| "http://localhost:8081".to_string());
-    let telegram_chat_id =
-        env::var("TELEGRAM_CHAT_ID").context("TELEGRAM_CHAT_ID must be set")?;
+    let telegram_chat_id = env::var("TELEGRAM_CHAT_ID").context("TELEGRAM_CHAT_ID must be set")?;
 
     let mut bots = Vec::new();
     if let Ok(bots_json) = env::var("BOTS_JSON") {
         bots = serde_json::from_str(&bots_json).context("Failed to parse BOTS_JSON")?;
     } else if let (Ok(id), Ok(token)) = (env::var("BOT_ID"), env::var("BOT_TOKEN")) {
-        bots.push(BotConfig {
-            bot_id: id,
-            token,
-        });
+        bots.push(BotConfig { bot_id: id, token });
     }
 
     let config = Config {
@@ -95,9 +86,8 @@ async fn main() -> anyhow::Result<()> {
             let (tx, mut rx) = mpsc::channel(256);
 
             let service_handle = service;
-            let upload_handle = tokio::spawn(async move {
-                service_handle.upload_file(&path, tx).await
-            });
+            let upload_handle =
+                tokio::spawn(async move { service_handle.upload_file(&path, tx).await });
 
             let mp = create_multi_progress();
             let mut overall_bar: Option<ProgressBar> = None;
@@ -172,10 +162,7 @@ async fn main() -> anyhow::Result<()> {
                         if let Some(ob) = overall_bar.take() {
                             ob.finish_and_clear();
                         }
-                        print_success(&format!(
-                            "Upload completed!\n    File ID: {}\n",
-                            file_id
-                        ));
+                        print_success(&format!("Upload completed!\n    File ID: {}\n", file_id));
                     }
                     UploadStatus::Failed { error } => {
                         if let Some(ob) = overall_bar.take() {
@@ -243,8 +230,7 @@ async fn main() -> anyhow::Result<()> {
                         total_chunks,
                         chunk_size,
                     } => {
-                        let cb =
-                            create_chunk_bar(&mp, chunk_index, total_chunks, chunk_size);
+                        let cb = create_chunk_bar(&mp, chunk_index, total_chunks, chunk_size);
                         chunk_bars.insert(chunk_index, cb);
                     }
                     DownloadStatus::ChunkProgress {
@@ -337,8 +323,7 @@ async fn main() -> anyhow::Result<()> {
         // Rename
         // ===================================================================
         Commands::Rename { old_path, new_path } => {
-            let spinner =
-                create_spinner(&format!("Renaming '{}' to '{}'...", old_path, new_path));
+            let spinner = create_spinner(&format!("Renaming '{}' to '{}'...", old_path, new_path));
             match service.rename_file(&old_path, &new_path).await {
                 Ok(_) => {
                     spinner.finish_and_clear();
@@ -359,10 +344,7 @@ async fn main() -> anyhow::Result<()> {
             match service.delete_file(&path).await {
                 Ok(_) => {
                     spinner.finish_and_clear();
-                    print_success(&format!(
-                        "Deleted '{}' (Telegram & Metadata)",
-                        path
-                    ));
+                    print_success(&format!("Deleted '{}' (Telegram & Metadata)", path));
                 }
                 Err(e) => {
                     spinner.finish_and_clear();

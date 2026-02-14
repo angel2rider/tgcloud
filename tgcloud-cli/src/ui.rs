@@ -1,8 +1,8 @@
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use comfy_table::{presets::UTF8_FULL, Attribute, Cell, Color, Table};
 use console::{style, Emoji};
-use comfy_table::{Table, presets::UTF8_FULL, Cell, Color, Attribute};
-use std::time::Duration;
 use human_bytes::human_bytes;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Banner & messages
@@ -85,7 +85,6 @@ pub fn create_chunk_bar(
     pb.enable_steady_tick(Duration::from_millis(200));
     pb
 }
-
 
 // ---------------------------------------------------------------------------
 // File listing table

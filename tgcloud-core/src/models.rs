@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use mongodb::bson::oid::ObjectId;
 use chrono::{DateTime, Utc};
+use mongodb::bson::oid::ObjectId;
+use serde::{Deserialize, Serialize};
 
 /// A single chunk of a file stored as a Telegram document.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -50,12 +50,29 @@ pub struct UploadEvent {
 pub enum UploadStatus {
     Started,
     Hashing,
-    HashComplete { sha256: String },
-    ChunkStarted { chunk_index: u32, total_chunks: u32, chunk_size: u64 },
-    ChunkProgress { chunk_index: u32, bytes_sent: u64, chunk_size: u64 },
-    ChunkCompleted { chunk_index: u32, total_chunks: u32 },
-    Completed { file_id: String },
-    Failed { error: String },
+    HashComplete {
+        sha256: String,
+    },
+    ChunkStarted {
+        chunk_index: u32,
+        total_chunks: u32,
+        chunk_size: u64,
+    },
+    ChunkProgress {
+        chunk_index: u32,
+        bytes_sent: u64,
+        chunk_size: u64,
+    },
+    ChunkCompleted {
+        chunk_index: u32,
+        total_chunks: u32,
+    },
+    Completed {
+        file_id: String,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -69,12 +86,30 @@ pub struct DownloadEvent {
 
 #[derive(Debug, Clone)]
 pub enum DownloadStatus {
-    Started { total_size: u64, total_chunks: u32 },
-    ChunkStarted { chunk_index: u32, total_chunks: u32, chunk_size: u64 },
-    ChunkProgress { chunk_index: u32, bytes_downloaded: u64, chunk_size: u64 },
-    ChunkCompleted { chunk_index: u32, total_chunks: u32 },
+    Started {
+        total_size: u64,
+        total_chunks: u32,
+    },
+    ChunkStarted {
+        chunk_index: u32,
+        total_chunks: u32,
+        chunk_size: u64,
+    },
+    ChunkProgress {
+        chunk_index: u32,
+        bytes_downloaded: u64,
+        chunk_size: u64,
+    },
+    ChunkCompleted {
+        chunk_index: u32,
+        total_chunks: u32,
+    },
     Merging,
     Verifying,
-    Completed { path: String },
-    Failed { error: String },
+    Completed {
+        path: String,
+    },
+    Failed {
+        error: String,
+    },
 }

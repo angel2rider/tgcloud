@@ -59,11 +59,7 @@ impl TgCloudService {
     // Upload
     // =======================================================================
 
-    pub async fn upload_file(
-        &self,
-        path: &str,
-        sender: mpsc::Sender<UploadEvent>,
-    ) -> Result<()> {
+    pub async fn upload_file(&self, path: &str, sender: mpsc::Sender<UploadEvent>) -> Result<()> {
         let _ = sender
             .send(UploadEvent {
                 status: UploadStatus::Started,
@@ -288,8 +284,7 @@ impl TgCloudService {
         sender: mpsc::Sender<DownloadEvent>,
     ) -> Result<()> {
         let file_opt = self.store.get_file_by_path(path).await?;
-        let file = file_opt
-            .ok_or_else(|| TgCloudError::FileNotFound(path.to_string()))?;
+        let file = file_opt.ok_or_else(|| TgCloudError::FileNotFound(path.to_string()))?;
 
         let _ = sender
             .send(DownloadEvent {
@@ -358,8 +353,10 @@ impl TgCloudService {
                 let mut temp_file = tokio::fs::File::create(&temp_path).await?;
                 let mut bytes_written: u64 = 0;
 
-                while let Some(data) =
-                    response.chunk().await.map_err(TgCloudError::TelegramError)?
+                while let Some(data) = response
+                    .chunk()
+                    .await
+                    .map_err(TgCloudError::TelegramError)?
                 {
                     temp_file.write_all(&data).await?;
                     bytes_written += data.len() as u64;
@@ -516,8 +513,7 @@ impl TgCloudService {
 
     pub async fn delete_file(&self, path: &str) -> Result<()> {
         let file_opt: Option<FileMetadata> = self.store.get_file_by_path(path).await?;
-        let file =
-            file_opt.ok_or_else(|| TgCloudError::FileNotFound(path.to_string()))?;
+        let file = file_opt.ok_or_else(|| TgCloudError::FileNotFound(path.to_string()))?;
 
         let token = self.bot_manager.get_bot_token(&file.bot_id).await?;
 

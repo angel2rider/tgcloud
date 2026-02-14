@@ -1,7 +1,6 @@
+use crate::errors::{Result, TgCloudError};
 use crate::models::Bot;
 use crate::storage::MongoStore;
-use crate::errors::{Result, TgCloudError};
-
 
 pub struct BotManager {
     store: MongoStore,
@@ -15,7 +14,9 @@ impl BotManager {
     pub async fn get_upload_bot(&self) -> Result<Bot> {
         let mut bots: Vec<Bot> = self.store.get_active_bots().await?;
         if bots.is_empty() {
-            return Err(TgCloudError::BotManagerError("No active bots found".to_string()));
+            return Err(TgCloudError::BotManagerError(
+                "No active bots found".to_string(),
+            ));
         }
 
         // Simple strategy: pick the one with lowest upload count
@@ -27,7 +28,9 @@ impl BotManager {
     pub async fn get_bot_token(&self, bot_id: &str) -> Result<String> {
         // In a real app we might cache this map in memory
         let bots: Vec<Bot> = self.store.get_active_bots().await?;
-        let bot = bots.into_iter().find(|b| b.bot_id == bot_id)
+        let bot = bots
+            .into_iter()
+            .find(|b| b.bot_id == bot_id)
             .ok_or_else(|| TgCloudError::BotManagerError(format!("Bot {} not found", bot_id)))?;
         Ok(bot.token)
     }

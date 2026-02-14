@@ -1,8 +1,8 @@
-use mongodb::{Client, Collection, options::ClientOptions};
-use mongodb::bson::{doc, oid::ObjectId};
-use crate::models::{FileMetadata, Bot};
 use crate::errors::{Result, TgCloudError};
+use crate::models::{Bot, FileMetadata};
 use futures::stream::TryStreamExt;
+use mongodb::bson::{doc, oid::ObjectId};
+use mongodb::{options::ClientOptions, Client, Collection};
 
 #[derive(Clone)]
 pub struct MongoStore {

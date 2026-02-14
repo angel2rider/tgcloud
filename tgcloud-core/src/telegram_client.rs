@@ -1,8 +1,8 @@
-use reqwest::{Client, Body, multipart, StatusCode};
-use tokio_util::codec::{BytesCodec, FramedRead};
 use crate::errors::{Result, TgCloudError};
+use reqwest::{multipart, Body, Client, StatusCode};
 use serde_json::Value;
 use std::time::Duration;
+use tokio_util::codec::{BytesCodec, FramedRead};
 
 /// Maximum number of retry attempts for transient errors.
 const MAX_RETRIES: u32 = 5;
@@ -68,8 +68,7 @@ impl TelegramClient {
                 let file = tokio::fs::File::open(&path).await?;
                 let stream = FramedRead::new(file, BytesCodec::new());
                 let file_body = Body::wrap_stream(stream);
-                upload_stream_inner(&client, &api_url, &token, &chat_id, file_name, file_body)
-                    .await
+                upload_stream_inner(&client, &api_url, &token, &chat_id, file_name, file_body).await
             }
         })
         .await
@@ -88,8 +87,15 @@ impl TelegramClient {
     ) -> Result<(String, i64)> {
         let stream = FramedRead::new(reader, BytesCodec::new());
         let file_body = Body::wrap_stream(stream);
-        upload_stream_inner(&self.client, &self.api_url, token, chat_id, file_name, file_body)
-            .await
+        upload_stream_inner(
+            &self.client,
+            &self.api_url,
+            token,
+            chat_id,
+            file_name,
+            file_body,
+        )
+        .await
     }
 
     // -----------------------------------------------------------------------
@@ -127,8 +133,7 @@ impl TelegramClient {
                 let reader = tokio::io::AsyncReadExt::take(file, length);
                 let stream = FramedRead::new(reader, BytesCodec::new());
                 let file_body = Body::wrap_stream(stream);
-                upload_stream_inner(&client, &api_url, &token, &chat_id, file_name, file_body)
-                    .await
+                upload_stream_inner(&client, &api_url, &token, &chat_id, file_name, file_body).await
             }
         })
         .await
@@ -138,12 +143,7 @@ impl TelegramClient {
     // Delete message
     // -----------------------------------------------------------------------
 
-    pub async fn delete_message(
-        &self,
-        token: &str,
-        chat_id: &str,
-        message_id: i64,
-    ) -> Result<()> {
+    pub async fn delete_message(&self, token: &str, chat_id: &str, message_id: i64) -> Result<()> {
         let url = format!("{}/bot{}/deleteMessage", self.api_url, token);
         let params = [
             ("chat_id", chat_id.to_string()),
@@ -166,23 +166,15 @@ impl TelegramClient {
     // -----------------------------------------------------------------------
 
     pub async fn get_download_url(&self, token: &str, file_id: &str) -> Result<String> {
-        let url = format!(
-            "{}/bot{}/getFile?file_id={}",
-            self.api_url, token, file_id
-        );
+        let url = format!("{}/bot{}/getFile?file_id={}", self.api_url, token, file_id);
         let res = self.client.get(&url).send().await?;
         let json: Value = res.json().await?;
 
-        let file_path = json["result"]["file_path"]
-            .as_str()
-            .ok_or_else(|| {
-                TgCloudError::DownloadFailed("No file_path in Telegram response".to_string())
-            })?;
+        let file_path = json["result"]["file_path"].as_str().ok_or_else(|| {
+            TgCloudError::DownloadFailed("No file_path in Telegram response".to_string())
+        })?;
 
-        Ok(format!(
-            "{}/file/bot{}/{}",
-            self.api_url, token, file_path
-        ))
+        Ok(format!("{}/file/bot{}/{}", self.api_url, token, file_path))
     }
 
     pub async fn download_file(&self, url: &str) -> Result<reqwest::Response> {
