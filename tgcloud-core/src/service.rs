@@ -49,7 +49,7 @@ impl TgCloudService {
     pub async fn upload_file(&self, path: &str, sender: mpsc::Sender<UploadEvent>) -> Result<()> {
         let metadata = tokio::fs::metadata(path).await?;
         let total_size = metadata.len();
-        
+
         // Chunk if > 2GB
         let total_chunks = if total_size == 0 {
             1
@@ -133,9 +133,10 @@ impl TgCloudService {
             let progress_clone = Arc::clone(&progress);
 
             futures.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.map_err(|_| {
-                    TgCloudError::UploadFailed("Semaphore closed".to_string())
-                })?;
+                let _permit = sem
+                    .acquire()
+                    .await
+                    .map_err(|_| TgCloudError::UploadFailed("Semaphore closed".to_string()))?;
 
                 let (tg_id, msg_id) = telegram
                     .upload_part_with_retry(
@@ -276,10 +277,10 @@ impl TgCloudService {
                 .telegram
                 .get_local_file_path(&self.bot_token, &chunk.telegram_file_id)
                 .await?;
-            
+
             // In local mode, getFile returns the absolute path on disk.
             chunk_paths.push(file_path);
-            
+
             // Increment progress by chunk size immediately as it's "fetched" to local cache
             progress.fetch_add(chunk.size, std::sync::atomic::Ordering::Relaxed);
         }
@@ -302,7 +303,7 @@ impl TgCloudService {
                 .parent()
                 .ok_or_else(|| TgCloudError::DownloadFailed("Invalid chunk path".to_string()))?;
             let merged_path = parent.join(original_filename.as_ref());
-            
+
             let mut out_file = tokio::fs::File::create(&merged_path).await?;
             for tmp_path in &chunk_paths {
                 let mut tmp = tokio::fs::File::open(tmp_path).await?;
@@ -325,7 +326,7 @@ impl TgCloudService {
                 .ok_or_else(|| TgCloudError::DownloadFailed("Invalid chunk path".to_string()))?;
             let target_path = parent.join(original_filename.as_ref());
             let target_path_str = target_path.to_string_lossy().to_string();
-            
+
             if current_path != &target_path_str {
                 tokio::fs::rename(current_path, &target_path).await?;
             }
@@ -370,9 +371,7 @@ impl TgCloudService {
 
         let _ = sender
             .send(DownloadEvent {
-                status: DownloadStatus::Completed {
-                    path: final_path,
-                },
+                status: DownloadStatus::Completed { path: final_path },
             })
             .await;
 
@@ -418,9 +417,10 @@ impl TgCloudService {
             let chunk_index = chunk.index;
 
             futures.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await.map_err(|_| {
-                    TgCloudError::DeleteFailed("Semaphore closed".to_string())
-                })?;
+                let _permit = sem
+                    .acquire()
+                    .await
+                    .map_err(|_| TgCloudError::DeleteFailed("Semaphore closed".to_string()))?;
 
                 telegram
                     .delete_message(&bot_token, &chat_id, message_id)

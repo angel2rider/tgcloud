@@ -5,8 +5,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
 use owo_colors::OwoColorize;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 use tgcloud_core::{Config, DownloadStatus, TgCloudService, UploadStatus};
 use tokio::sync::mpsc;
@@ -29,9 +29,7 @@ enum Commands {
     /// Upload a file
     Upload { path: String },
     /// Download a file
-    Download {
-        remote_path: String,
-    },
+    Download { remote_path: String },
     /// List files
     List {
         #[arg(default_value = "root")]
@@ -68,7 +66,9 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let command = args.command.context("No command specified. Use --gui or a subcommand.")?;
+    let command = args
+        .command
+        .context("No command specified. Use --gui or a subcommand.")?;
     match command {
         // ===================================================================
         // Upload
@@ -152,22 +152,14 @@ async fn main() -> anyhow::Result<()> {
         // ===================================================================
         // Download
         // ===================================================================
-        Commands::Download {
-            remote_path,
-        } => {
-            println!(
-                "📥 Local fetch for: {}",
-                remote_path.cyan()
-            );
+        Commands::Download { remote_path } => {
+            println!("📥 Local fetch for: {}", remote_path.cyan());
 
             let (tx, mut rx) = mpsc::channel(256);
             let service_handle = service.clone();
 
-            let download_handle = tokio::spawn(async move {
-                service_handle
-                    .download_file(&remote_path, tx)
-                    .await
-            });
+            let download_handle =
+                tokio::spawn(async move { service_handle.download_file(&remote_path, tx).await });
 
             let mut progress_bar: Option<ProgressBar> = None;
             let mut spinner: Option<ProgressBar> = None;
@@ -220,7 +212,10 @@ async fn main() -> anyhow::Result<()> {
                         if let Some(s) = spinner.take() {
                             s.finish_and_clear();
                         }
-                        print_success(&format!("Download completed! File is at:\n  {}", path.yellow()));
+                        print_success(&format!(
+                            "Download completed! File is at:\n  {}",
+                            path.yellow()
+                        ));
                     }
                     DownloadStatus::Failed { error } => {
                         if let Some(pb) = progress_bar.take() {

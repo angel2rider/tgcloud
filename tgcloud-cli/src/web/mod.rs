@@ -1,3 +1,4 @@
+use askama::Template;
 use axum::{
     extract::{Multipart, Path, State},
     http::StatusCode,
@@ -5,15 +6,13 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use askama::Template;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tgcloud_core::{TgCloudService, FileMetadata};
-use tokio::sync::mpsc;
-use std::net::SocketAddr;
-use tower_http::cors::CorsLayer;
-use chrono::{DateTime, Utc};
 use owo_colors::OwoColorize;
+use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tgcloud_core::{FileMetadata, TgCloudService};
+use tokio::sync::mpsc;
+use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 pub struct WebState {
@@ -50,7 +49,11 @@ pub async fn start_server(service: Arc<TgCloudService>) -> anyhow::Result<()> {
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 8090));
-    println!("\n  {} TGCloud Web UI running at http://{}", "🌐".cyan(), addr);
+    println!(
+        "\n  {} TGCloud Web UI running at http://{}",
+        "🌐".cyan(),
+        addr
+    );
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app.into_make_service())
@@ -85,10 +88,18 @@ async fn index_handler(State(state): State<WebState>) -> impl IntoResponse {
             let template = IndexTemplate { files };
             match template.render() {
                 Ok(html) => Html(html).into_response(),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Template error: {}", e)).into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Template error: {}", e),
+                )
+                    .into_response(),
             }
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Service error: {}", e)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Service error: {}", e),
+        )
+            .into_response(),
     }
 }
 
@@ -97,7 +108,7 @@ async fn list_files_handler(State(state): State<WebState>) -> impl IntoResponse 
         Ok(files) => {
             let files: Vec<FileInfo> = files.into_iter().map(format_file_info).collect();
             Json(files).into_response()
-        },
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -112,7 +123,11 @@ async fn rename_handler(
     State(state): State<WebState>,
     Json(payload): Json<RenameRequest>,
 ) -> impl IntoResponse {
-    match state.service.rename_file_by_id(&payload.file_id, &payload.new_path).await {
+    match state
+        .service
+        .rename_file_by_id(&payload.file_id, &payload.new_path)
+        .await
+    {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }

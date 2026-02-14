@@ -25,8 +25,9 @@ impl Config {
             .join("tgcloud");
 
         if !config_dir.exists() {
-            std::fs::create_dir_all(&config_dir)
-                .map_err(|e| ConfigError::General(format!("Failed to create config directory: {}", e)))?;
+            std::fs::create_dir_all(&config_dir).map_err(|e| {
+                ConfigError::General(format!("Failed to create config directory: {}", e))
+            })?;
         }
 
         let config_path = config_dir.join(".env");
@@ -40,8 +41,8 @@ impl Config {
 
         dotenv::from_path(&config_path).ok();
 
-        let mongo_uri = env::var("MONGO_URI")
-            .map_err(|_| ConfigError::MissingEnvVar("MONGO_URI".into()))?;
+        let mongo_uri =
+            env::var("MONGO_URI").map_err(|_| ConfigError::MissingEnvVar("MONGO_URI".into()))?;
         if mongo_uri.trim().is_empty() {
             return Err(ConfigError::MissingEnvVar("MONGO_URI".into()));
         }
@@ -78,4 +79,3 @@ impl Config {
         })
     }
 }
-

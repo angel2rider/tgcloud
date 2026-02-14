@@ -187,7 +187,10 @@ impl TelegramClient {
         // to avoid double slashes in the constructed URL.
         let sanitized_path = file_path.trim_start_matches('/');
 
-        Ok(format!("{}/file/bot{}/{}", self.api_url, token, sanitized_path))
+        Ok(format!(
+            "{}/file/bot{}/{}",
+            self.api_url, token, sanitized_path
+        ))
     }
 
     /// Triggers getFile and returns the local file path (absolute in local mode).
